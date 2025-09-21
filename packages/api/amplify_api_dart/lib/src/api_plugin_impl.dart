@@ -333,6 +333,14 @@ class AmplifyAPIDart extends APIPluginInterface with AWSDebuggable {
     return _webSocketBloc(apiName: request.apiName).subscribe(event);
   }
 
+  /// Unsubscribes from an active subscription.
+  Future<void> unsubscribe<T>(GraphQLRequest<T> request) async {
+    final endpoint = _getEndpointConfig(ApiType.graphQL, request.apiName);
+    if (_webSocketBlocPool[endpoint.name] != null) {
+      _webSocketBloc(apiName: request.apiName).add(UnsubscribeEvent(request));
+    }
+  }
+
   // ====== REST =======
 
   @override
