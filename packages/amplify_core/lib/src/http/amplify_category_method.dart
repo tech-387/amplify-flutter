@@ -73,6 +73,7 @@ enum ApiCategoryMethod with AmplifyCategoryMethod {
   put('27'),
   query('28'),
   subscribe('29'),
+  unsubscribe('98'), // new method
   post('54');
 
   const ApiCategoryMethod(this.method);

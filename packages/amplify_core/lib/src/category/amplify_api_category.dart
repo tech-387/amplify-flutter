@@ -48,6 +48,11 @@ class APICategory extends AmplifyCategory<APIPluginInterface> {
     () => defaultPlugin.subscribe(request, onEstablished: onEstablished),
   );
 
+  Future<void> unsubscribe<T>(GraphQLRequest<T> request) => identifyCall(
+    ApiCategoryMethod.unsubscribe,
+    () => defaultPlugin.unsubscribe(request),
+  );
+
   // ====== RestAPI ======
 
   /// Sends an HTTP DELETE request to the REST API endpoint.

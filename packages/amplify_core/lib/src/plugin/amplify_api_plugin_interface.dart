@@ -34,6 +34,10 @@ abstract class APIPluginInterface extends AmplifyPluginInterface {
     throw UnimplementedError('subscribe() has not been implemented.');
   }
 
+  Future<void> unsubscribe<T>(GraphQLRequest<T> request) {
+    throw UnimplementedError('unsubscribe() has not been implemented.');
+  }
+
   /// Registers an [APIAuthProvider] with this plugin.
   void registerAuthProvider(APIAuthProvider authProvider) {
     authProviders[authProvider.type] = authProvider;
