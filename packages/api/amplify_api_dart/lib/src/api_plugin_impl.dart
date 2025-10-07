@@ -333,13 +333,13 @@ class AmplifyAPIDart extends APIPluginInterface with AWSDebuggable {
     return _webSocketBloc(apiName: request.apiName).subscribe(event);
   }
 
+  /// Returns a stream of WebSocket state events for the specified API.
+  ///
+  /// The stream will emit state changes like connecting, connected, disconnected, etc.
   @override
-  Future<void> unsubscribe<T>(GraphQLRequest<T> request) async {
-    final endpoint = _getEndpointConfig(ApiType.graphQL, request.apiName);
-    if (_webSocketBlocPool[endpoint.name] != null) {
-      final event = UnsubscribeEvent(request);
-      _webSocketBlocPool[endpoint.name]!.unsubscribe(event);
-    }
+  Stream<WebSocketState> getWebSocketStateStream<T>(GraphQLRequest<T> request) {
+    final webSocketBloc = _webSocketBloc(apiName: request.apiName);
+    return webSocketBloc.stream;
   }
 
   // ====== REST =======

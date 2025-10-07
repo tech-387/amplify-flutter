@@ -48,10 +48,11 @@ class APICategory extends AmplifyCategory<APIPluginInterface> {
     () => defaultPlugin.subscribe(request, onEstablished: onEstablished),
   );
 
-  Future<void> unsubscribe<T>(GraphQLRequest<T> request) => identifyCall(
-    ApiCategoryMethod.unsubscribe,
-    () => defaultPlugin.unsubscribe(request),
-  );
+  Stream<dynamic> getWebSocketStateStream<T>(GraphQLRequest<T> request) =>
+      identifyCall(
+        ApiCategoryMethod.getWebSocketState,
+        () => defaultPlugin.getWebSocketStateStream(request),
+      );
 
   // ====== RestAPI ======
 
