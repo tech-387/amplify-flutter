@@ -183,7 +183,7 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
     } else if (event is ReconnectEvent) {
       yield* _reconnect();
     } else if (event is UnsubscribeEvent) {
-      yield* _unsubscribe(event);
+      yield* unsubscribe(event);
     }
     // [WsSubscriptionBloc] Events
     else if (event is SubscriptionComplete) {
@@ -448,7 +448,7 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
   }
 
   /// Sends stop message
-  Stream<WebSocketState> _unsubscribe(UnsubscribeEvent event) async* {
+  Stream<WebSocketState> unsubscribe(UnsubscribeEvent event) async* {
     if (_currentState is! ConnectedState) {
       return;
     }
