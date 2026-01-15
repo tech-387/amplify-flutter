@@ -34,6 +34,8 @@ abstract class APIPluginInterface extends AmplifyPluginInterface {
     throw UnimplementedError('subscribe() has not been implemented.');
   }
 
+  Stream<dynamic> getWebSocketStateStream<T>(GraphQLRequest<T> request);
+
   /// Registers an [APIAuthProvider] with this plugin.
   void registerAuthProvider(APIAuthProvider authProvider) {
     authProviders[authProvider.type] = authProvider;
