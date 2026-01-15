@@ -1,9 +1,0 @@
-include: package:amplify_lints/app.yaml
-
-analyzer:
-  exclude:
-    - lib/models/*
-
-linter:
-  rules:
-    avoid_print: false
