@@ -48,6 +48,12 @@ class APICategory extends AmplifyCategory<APIPluginInterface> {
     () => defaultPlugin.subscribe(request, onEstablished: onEstablished),
   );
 
+  Stream<dynamic> getWebSocketStateStream<T>(GraphQLRequest<T> request) =>
+      identifyCall(
+        ApiCategoryMethod.getWebSocketState,
+        () => defaultPlugin.getWebSocketStateStream(request),
+      );
+
   // ====== RestAPI ======
 
   /// Sends an HTTP DELETE request to the REST API endpoint.
