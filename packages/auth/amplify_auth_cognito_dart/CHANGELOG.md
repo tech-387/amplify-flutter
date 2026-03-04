@@ -1,3 +1,13 @@
+## 0.11.18
+
+### Fixes
+- fix(auth): handle SMS_OTP challenge in USER_AUTH flow ([#6632](https://github.com/aws-amplify/amplify-flutter/pull/6632))
+
+## 0.11.17
+
+### Features
+- feat(auth): Passwordless login ([#6538](https://github.com/aws-amplify/amplify-flutter/pull/6538))
+
 ## 0.11.16
 
 ### Features

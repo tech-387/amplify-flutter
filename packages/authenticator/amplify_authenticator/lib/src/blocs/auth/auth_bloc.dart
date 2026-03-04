@@ -261,6 +261,19 @@ class StateMachineBloc
             }
           }
           yield* _checkUserVerification();
+        case AuthSignInStep.continueSignInWithFirstFactorSelection:
+        case AuthSignInStep.confirmSignInWithOtp:
+        case AuthSignInStep.confirmSignInWithPassword:
+          // TODO(cadivus): Implement Passwordless Authenticator. See:
+          // https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-authentication-flow-methods.html#amazon-cognito-user-pools-authentication-flow-methods-passkey
+          // https://docs.amplify.aws/react/build-a-backend/auth/concepts/passwordless/#webauthn-passkey
+          _exceptionController.add(
+            AuthenticatorException(
+              'Passwordless is not supported at this time. Please try again.',
+              showBanner: true,
+            ),
+          );
+          yield* _changeScreen(initialStep);
       }
     } on AuthNotAuthorizedException {
       /// The .failAuthentication flag available in the DefineAuthChallenge Lambda trigger
@@ -377,8 +390,6 @@ class StateMachineBloc
         final result = await _authService.signIn(data.username, data.password);
         await _processSignInResult(result, isSocialSignIn: false);
       } else if (data is AuthSocialSignInData) {
-        // Do not await a social sign-in since multiple sign-in attempts
-        // can occur.
         await _authService
             .signInWithProvider(
               data.provider,
@@ -392,6 +403,13 @@ class StateMachineBloc
                   ? logger.info
                   : logger.error;
               log('Error signing in', error, stackTrace);
+              // Emit exception so that the UI can exit loading state
+              _exceptionController.add(
+                AuthenticatorException(
+                  error,
+                  showBanner: error is! UserCancelledException,
+                ),
+              );
             });
       } else {
         throw StateError('Bad sign in data: $data');

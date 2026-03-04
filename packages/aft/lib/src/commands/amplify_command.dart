@@ -105,7 +105,7 @@ abstract class AmplifyCommand extends Command<void>
     ...Platform.environment,
     'AFT_ROOT': rootDir.uri.toFilePath(),
     // Needed for running `dart doc` for Flutter packages.
-    if (flutterRoot != null) 'FLUTTER_ROOT': flutterRoot!,
+    'FLUTTER_ROOT': ?flutterRoot,
   };
 
   /// The path to the Flutter SDK, if installed.
@@ -177,6 +177,66 @@ abstract class AmplifyCommand extends Command<void>
     }
 
     return PubVersionInfo(semvers..sort());
+  }
+
+  /// Checks whether [package] still has a pending analysis on pub.dev.
+  ///
+  /// Returns `true` if `grantedPoints` is 0 and `tags` does not contain any
+  /// string starting with `sdk:`, `platform:`, `runtime:`, or `is:`.
+  Future<bool> isPendingAnalysis(String package) async {
+    final uri = Uri.parse('https://pub.dev/api/packages/$package/score');
+    final request = AWSHttpRequest.get(
+      uri,
+      headers: const {AWSHeaders.accept: 'application/json'},
+    );
+    final resp = await httpClient.send(request).response;
+    final body = await resp.decodeBody();
+
+    if (resp.statusCode != 200) {
+      throw Exception(
+        'Failed to fetch score for $package: ${resp.statusCode} $body',
+      );
+    }
+
+    final json = jsonDecode(body) as Map<String, Object?>;
+    final grantedPoints = json['grantedPoints'] as num? ?? 0;
+    final tags = (json['tags'] as List<Object?>?)?.cast<String>() ?? <String>[];
+
+    if (grantedPoints != 0) {
+      return false;
+    }
+
+    final analysisPrefixes = ['sdk:', 'platform:', 'runtime:', 'is:'];
+    final hasAnalysisTag = tags.any(
+      (tag) => analysisPrefixes.any((prefix) => tag.startsWith(prefix)),
+    );
+
+    return !hasAnalysisTag;
+  }
+
+  /// Await a pending analysis on pub.dev for [package].
+  ///
+  /// Polls the pub.dev package page until the analysis is complete.
+  Future<void> awaitPendingAnalysis(String package) async {
+    final qaDurations = Platform.environment.containsKey('QA_DURATIONS');
+
+    var pollInterval = qaDurations
+        ? const Duration(seconds: 1)
+        : const Duration(seconds: 15);
+
+    final stopwatch = Stopwatch()..start();
+
+    while (await isPendingAnalysis(package)) {
+      final elapsed = stopwatch.elapsed;
+
+      if (!qaDurations && elapsed >= const Duration(seconds: 10 * 60)) {
+        pollInterval = const Duration(seconds: 30);
+      } else if (!qaDurations && elapsed >= const Duration(seconds: 3 * 60)) {
+        pollInterval = const Duration(seconds: 20);
+      }
+
+      await Future<void>.delayed(pollInterval);
+    }
   }
 
   @override
