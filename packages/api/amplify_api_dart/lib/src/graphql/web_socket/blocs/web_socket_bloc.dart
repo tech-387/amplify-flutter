@@ -593,11 +593,12 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
   /// Takes a WebSocketEvent and sends it to the corresponding sub bloc
   Stream<WebSocketState> _sendEventToSubBloc(SubscriptionEvent event) async* {
     final id = event.subscriptionId;
-    assert(
-      _currentState.subscriptionBlocs.containsKey(id),
-      'Bloc is missing subscription for $id',
-    );
-    _currentState.subscriptionBlocs[id]!.add(event);
+    final subBloc = _currentState.subscriptionBlocs[id];
+    if (subBloc == null) {
+      logger.verbose('Ignoring event for already-removed subscription $id');
+      return;
+    }
+    subBloc.add(event);
     // TODO(dnys1): Yield broken on web debug build.
     yield* const Stream.empty();
   }
