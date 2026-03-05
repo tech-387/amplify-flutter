@@ -125,9 +125,16 @@ class AmplifyWebSocketService
   }
 
   void _send(WebSocketMessage message) {
-    assert(sink != null, 'Sink must exist');
+    final currentSink = sink;
+    if (currentSink == null) {
+      logger.error(
+        'Attempted to send message on a closed or uninitialized '
+        'WebSocket connection: ${message.messageType}',
+      );
+      return;
+    }
     final msgJson = json.encode(message.toJson());
-    sink!.add(msgJson);
+    currentSink.add(msgJson);
   }
 
   Future<void> _sendSubscriptionRegistrationMessage<T>(
