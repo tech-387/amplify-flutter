@@ -29,12 +29,7 @@ class GraphQLResponseDecoder {
     final modelType = request.modelType;
     if (modelType == null) {
       if (T == String || T == dynamic) {
-        // Preserve `null`. json.encode(null) returns "null" not `null`
-        final encodedData = data != null ? json.encode(data) : null;
-        return GraphQLResponse(
-          data: encodedData as T?,
-          errors: errors,
-        ); // <T> is implied
+        return _encodeStringResponse<T>(data: data, errors: errors);
       } else {
         throw const ApiOperationException(
           'Decoding of the response type provided is currently unsupported',
@@ -112,6 +107,26 @@ class GraphQLResponseDecoder {
       decodedData = modelType.fromJson(dataJson!) as T;
     }
     return GraphQLResponse<T>(data: decodedData, errors: errors);
+  }
+
+  /// Decodes [response] like [decode] does for a request without a model
+  /// type: [GraphQLResponse.data] is the response `data` encoded as a JSON
+  /// string.
+  ///
+  /// Unlike [decode], it needs nothing registered in the calling isolate (such
+  /// as a model provider), so it can run in a background isolate.
+  GraphQLResponse<T> decodeString<T>(Map<String, dynamic> response) {
+    final errors = _deserializeGraphQLResponseErrors(response);
+    return _encodeStringResponse<T>(data: response['data'], errors: errors);
+  }
+
+  GraphQLResponse<T> _encodeStringResponse<T>({
+    required Object? data,
+    required List<GraphQLResponseError> errors,
+  }) {
+    // Preserve `null`. json.encode(null) returns "null" not `null`
+    final encodedData = data != null ? json.encode(data) : null;
+    return GraphQLResponse(data: encodedData as T?, errors: errors);
   }
 }
 
