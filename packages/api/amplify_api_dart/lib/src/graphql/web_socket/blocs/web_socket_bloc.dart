@@ -64,6 +64,10 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
   /// Default timeout response for polling
   static const Duration _pollResponseTimeout = Duration(seconds: 5);
 
+  /// How long a ping may stay unanswered before the connection is considered
+  /// broken, see [WebSocketService.verifyConnection].
+  static const Duration _connectionCheckTimeout = Duration(seconds: 3);
+
   /// Indicates if the bloc has finished closing
   final done = Completer<void>();
 
@@ -110,6 +114,27 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
 
   /// The in-flight reconnection, if any. Ensures at most one runs at a time.
   Future<void>? _reconnectOperation;
+
+  /// Identifies the latest reconnection, so one replaced by [_startReconnect]
+  /// stops retrying and does not act when it completes.
+  int _reconnectGeneration = 0;
+
+  /// Identifies the connection whose messages are currently processed. Only
+  /// that connection closing is reported with a [ConnectionClosedEvent].
+  Object? _activeConnection;
+
+  /// Whether the process was paused since the last keep alive message.
+  ///
+  /// The keep alive timer does not account for the OS freezing a paused
+  /// process, so it can expire right after the process resumes, before the
+  /// keep alive messages received in the meantime are processed.
+  bool _pausedSinceKeepAlive = false;
+
+  /// Whether the process is paused, i.e. in the background.
+  bool _isProcessPaused = false;
+
+  /// Incremented each time the process is paused, see [_poll].
+  int _pauseCount = 0;
 
   /// OVERRIDES
   ///
@@ -176,6 +201,8 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
       yield* _connectionAck(event);
     } else if (event is ConnectionErrorEvent) {
       yield* _connectionError(event);
+    } else if (event is ConnectionClosedEvent) {
+      yield* _connectionClosed();
     } else if (event is InitEvent) {
       yield* _init(event);
     } else if (event is KeepAliveEvent) {
@@ -238,6 +265,7 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
       'We should never evaluate a connection ack message while not connecting.',
     );
 
+    _pausedSinceKeepAlive = false;
     final timeoutDuration = Duration(
       milliseconds: event.payload.connectionTimeoutMs,
     );
@@ -290,6 +318,42 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
     _shutdownWithException(exception, StackTrace.current);
   }
 
+  /// Handles the connection closing without the bloc closing it: the OS or
+  /// AppSync dropped it, for example while the process was paused, or a ping
+  /// sent by [WebSocketService.verifyConnection] was not answered.
+  ///
+  /// Without this, a dropped connection would look connected until the keep
+  /// alive timeout, and subscription events would be lost until then.
+  Stream<WebSocketState> _connectionClosed() async* {
+    final state = _currentState;
+    if (state is ConnectedState) {
+      // ignore: invalid_use_of_internal_member
+      if (!WebSocketOptions.autoReconnect) {
+        _shutdownWithException(
+          const NetworkException(
+            'Web socket connection closed.',
+            recoverySuggestion: 'Check internet connection.',
+          ),
+          StackTrace.current,
+        );
+        return;
+      }
+      logger.warn('Web socket connection closed unexpectedly, reconnecting.');
+      yield state.reconnecting(networkState: NetworkState.disconnected);
+      add(const ReconnectEvent());
+    } else if (state is ConnectingState) {
+      _shutdownWithException(
+        const NetworkException(
+          'Web socket connection closed before it was established.',
+          recoverySuggestion: 'Check internet connection.',
+        ),
+        StackTrace.current,
+      );
+    }
+    // TODO(dnys1): Yield broken on web debug build.
+    yield* const Stream.empty();
+  }
+
   // Init connection and add channel events to the event stream.
   Stream<WebSocketState> _init(InitEvent event) async* {
     assert(
@@ -299,6 +363,8 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
       'Bloc should not be in ${_currentState.runtimeType} when calling init.',
     );
 
+    final connection = Object();
+    _activeConnection = connection;
     _currentState.service
         .init(_currentState)
         .listen(
@@ -312,6 +378,12 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
             );
             _shutdownWithException(exception, st);
           },
+          onDone: () {
+            // Connections closed by the bloc itself are no longer active.
+            if (identical(connection, _activeConnection)) {
+              _safeAdd(const ConnectionClosedEvent());
+            }
+          },
         );
 
     yield _currentState.connecting(networkState: NetworkState.connected);
@@ -322,6 +394,7 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
     final state = _currentState;
     if (state is ConnectedState) {
       state.timeoutTimer.reset();
+      _pausedSinceKeepAlive = false;
       logger.verbose('Reset timer');
     }
     // TODO(dnys1): Yield broken on web debug build.
@@ -351,11 +424,26 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
     yield* const Stream.empty();
   }
 
+  /// Checks the connection after the process resumes from a paused state
+  /// instead of always reconnecting.
+  ///
+  /// While the process is paused, the OS may freeze or suspend it. The
+  /// connection usually survives that, and the messages AppSync sent in the
+  /// meantime are received once the process resumes, so nothing is missed and
+  /// reconnecting would only interrupt the subscriptions. A connection that
+  /// the OS or AppSync closed in the meantime is noticed as soon as the process
+  /// resumes (see [_connectionClosed]); one that silently stopped working is
+  /// closed by an unanswered ping.
   Stream<WebSocketState> _processResumed() async* {
     final state = _currentState;
     if (state is ConnectedState) {
-      yield state.reconnecting(networkState: NetworkState.disconnected);
-      add(const ReconnectEvent());
+      state.service.verifyConnection(_connectionCheckTimeout);
+    } else if (state is ReconnectingState && _reconnectOperation != null) {
+      // The OS may block the network of a process in the background (Android
+      // does so a few seconds after the app leaves the foreground), so the
+      // reconnection may be waiting out a long back off. Try again now.
+      logger.verbose('Process resumed while reconnecting, retrying now');
+      _startReconnect(state);
     }
     // TODO(dnys1): Yield broken on web debug build.
     yield* const Stream.empty();
@@ -389,22 +477,34 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
       _currentState is ReconnectingState,
       'Bloc should be set to connecting before starting reconnection.',
     );
-    _reconnectOperation ??= _performReconnect(
-      _currentState,
-    ).whenComplete(() => _reconnectOperation = null);
+    if (_reconnectOperation == null) _startReconnect(_currentState);
 
     // TODO(dnys1): Yield broken on web debug build.
     yield* const Stream.empty();
   }
 
+  /// Starts a reconnection, replacing the one in flight, if any.
+  void _startReconnect(WebSocketState state) {
+    final generation = ++_reconnectGeneration;
+    late final Future<void> operation;
+    operation = _performReconnect(state, generation).whenComplete(() {
+      if (identical(_reconnectOperation, operation)) {
+        _reconnectOperation = null;
+      }
+    });
+    _reconnectOperation = operation;
+  }
+
   /// Pings AppSync with retry/back off and reinitializes the connection, or
   /// shuts down on failure. Runs off the event queue via [_reconnect].
-  Future<void> _performReconnect(WebSocketState state) async {
+  Future<void> _performReconnect(WebSocketState state, int generation) async {
+    bool isReplaced() => generation != _reconnectGeneration;
     try {
       // Begin reconnection with retry/back off on ping endpoint
       final res = await state.options.retryOptions.retry(
         // Make a GET request
         _sendPollRequest,
+        retryIf: (_) => !isReplaced(),
       );
 
       await checkPollResponse(res);
@@ -412,9 +512,10 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
       // **Ping succeeded**
 
       // Bloc may have shut down during the ping, don't act on a closed bloc
-      if (_isShuttingDown) return;
+      if (_isShuttingDown || isReplaced()) return;
 
       // Prep new connection
+      _activeConnection = null;
       await state.service.close();
       for (final bloc in state.subscriptionBlocs.values) {
         bloc.add(SubscriptionPendingEvent(bloc.currentState.request.id));
@@ -423,8 +524,8 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
       // Init new connection
       _safeAdd(const InitEvent());
     } on Exception catch (e, st) {
-      // Ping failed, nothing to do if already shutting down
-      if (_isShuttingDown) return;
+      // Ping failed, nothing to do if already shutting down or replaced
+      if (_isShuttingDown || isReplaced()) return;
       _shutdownWithException(
         NetworkException(
           'Unable to recover network connection, web socket will close.',
@@ -513,6 +614,7 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
     if (_currentState is! FailureState) {
       _emit(_currentState.disconnect());
     }
+    _activeConnection = null;
     _currentState.service.close();
 
     await Future.wait<void>([
@@ -564,6 +666,11 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
     var prev = ProcessStatus.detached;
     return _processLifeCycle.onStateChanged.listen(
       (state) {
+        _isProcessPaused = state == ProcessStatus.paused;
+        if (state == ProcessStatus.paused) {
+          _pausedSinceKeepAlive = true;
+          _pauseCount++;
+        }
         if (_isResuming(state, prev)) {
           // ignore: invalid_use_of_internal_member
           if (!WebSocketOptions.autoReconnect) {
@@ -594,12 +701,24 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
         current == ProcessStatus.resumed;
   }
 
+  /// Checks that AppSync is reachable, and reconnects if it is not.
+  ///
+  /// Skipped while the process is paused: the OS may suspend the process
+  /// during the poll, and the poll timeout would then expire as soon as the
+  /// process resumes, even though the connection is fine. The connection is
+  /// verified when the process resumes instead, see [_processResumed].
   Future<void> _poll() async {
+    if (_isProcessPaused) return;
+    final pauseCount = _pauseCount;
     try {
       final res = await _sendPollRequest();
       await checkPollResponse(res);
       _safeAdd(const PollSuccessEvent());
     } on Exception catch (e) {
+      if (pauseCount != _pauseCount) {
+        logger.verbose('Ignoring a poll that failed across a pause: $e');
+        return;
+      }
       _safeAdd(PollFailedEvent(e));
     }
   }
@@ -676,6 +795,20 @@ class WebSocketBloc with AWSDebuggable, AmplifyLoggerMixin {
       _currentState is ConnectedState,
       'Timeout should only occur when connected.',
     );
+
+    final state = _currentState;
+    // ignore: invalid_use_of_internal_member
+    if (_pausedSinceKeepAlive && WebSocketOptions.autoReconnect) {
+      // The keep alive messages may have been missed only because the process
+      // was frozen. Keep the connection if it still answers.
+      _pausedSinceKeepAlive = false;
+      if (state is ConnectedState) {
+        logger.verbose('Keep alive timed out after a pause, verifying');
+        state.timeoutTimer.reset();
+        state.service.verifyConnection(_connectionCheckTimeout);
+        return;
+      }
+    }
 
     final exception = TimeoutException(
       'Web Socket Connection Timeout',

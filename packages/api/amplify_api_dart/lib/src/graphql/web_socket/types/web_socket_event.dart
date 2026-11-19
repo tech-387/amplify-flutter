@@ -175,6 +175,19 @@ class ConnectionErrorEvent extends WebSocketEvent {
   Map<String, Object?> toJson() => const {};
 }
 
+/// The web socket connection closed without the bloc closing it, for example
+/// because the OS or AppSync dropped it or a ping was not answered.
+class ConnectionClosedEvent extends WebSocketEvent {
+  /// Create a connection closed event
+  const ConnectionClosedEvent();
+
+  @override
+  String get runtimeTypeName => 'ConnectionClosedEvent';
+
+  @override
+  Map<String, Object?> toJson() => const {};
+}
+
 /// Subscribe Event to establish a new subscription on the bloc
 class SubscribeEvent<T> extends WebSocketEvent {
   /// Takes in a [GraphQLRequest<T>] to subscribe to and

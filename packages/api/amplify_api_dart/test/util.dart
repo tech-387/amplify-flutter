@@ -166,12 +166,25 @@ WebSocketChannel getMockWebSocketChannel(Uri uri) {
 WebSocketMessage startAck(String subscriptionID) =>
     WebSocketMessage(messageType: MessageType.startAck, id: subscriptionID);
 
-void sendMockConnectionAck(WebSocketBloc bloc, MockWebSocketService service) {
+void sendMockConnectionAck(
+  WebSocketBloc bloc,
+  MockWebSocketService service, {
+  int? connectionTimeoutMs,
+}) {
   bloc.stream.listen((event) {
     final state = event;
     if (state is ConnectingState &&
         state.networkState == NetworkState.connected) {
-      service.channel.sink.add(jsonEncode(mockAckMessage));
+      service.channel.sink.add(
+        jsonEncode(
+          connectionTimeoutMs == null
+              ? mockAckMessage
+              : {
+                  'type': 'connection_ack',
+                  'payload': {'connectionTimeoutMs': connectionTimeoutMs},
+                },
+        ),
+      );
     }
   });
 }
@@ -291,6 +304,26 @@ class MockWebSocketService extends AmplifyWebSocketService {
       'type': 'complete',
     });
     channel.sink.add(completeMessage);
+  }
+
+  /// Whether the connection is broken, so [verifyConnection] closes it.
+  bool isConnectionBroken = false;
+
+  /// Number of [verifyConnection] calls.
+  int verifyConnectionCount = 0;
+
+  @override
+  void verifyConnection(Duration timeout) {
+    verifyConnectionCount++;
+    if (isConnectionBroken) {
+      dropConnection();
+    }
+  }
+
+  /// Closes the connection the way the OS or AppSync would, without the bloc
+  /// closing it.
+  void dropConnection() {
+    channel.controller.close();
   }
 }
 

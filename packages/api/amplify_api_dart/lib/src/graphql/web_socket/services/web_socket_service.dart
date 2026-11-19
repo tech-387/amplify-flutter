@@ -7,6 +7,7 @@ import 'dart:convert';
 import 'package:amplify_api_dart/src/decorators/web_socket_auth_utils.dart';
 import 'package:amplify_api_dart/src/graphql/web_socket/blocs/subscriptions_bloc.dart';
 import 'package:amplify_api_dart/src/graphql/web_socket/blocs/web_socket_bloc.dart';
+import 'package:amplify_api_dart/src/graphql/web_socket/services/web_socket_connection.dart';
 import 'package:amplify_api_dart/src/graphql/web_socket/state/web_socket_state.dart';
 import 'package:amplify_api_dart/src/graphql/web_socket/types/subscriptions_event.dart';
 import 'package:amplify_api_dart/src/graphql/web_socket/types/web_socket_message_stream_transformer.dart';
@@ -32,6 +33,11 @@ abstract class WebSocketService implements Closeable {
 
   /// Unsubscribe a [GraphQLRequest] inside the provided [SubscriptionBloc]
   Future<void> unsubscribe(String subscriptionId);
+
+  /// Checks that the open connection still reaches AppSync. If it does not
+  /// answer within [timeout], the connection is closed and the stream
+  /// returned by [init] is done.
+  void verifyConnection(Duration timeout);
 }
 
 /// {@template amplify_api.web_socket_service}
@@ -46,6 +52,9 @@ class AmplifyWebSocketService
   /// Sink used for sending messages to AppSync
   @visibleForTesting
   WebSocketSink? sink;
+
+  /// The open connection, if any.
+  WebSocketConnection? _connection;
 
   @override
   Stream<WebSocketEvent> init(WebSocketState state) {
@@ -70,13 +79,14 @@ class AmplifyWebSocketService
         state.authProviderRepo,
       );
       final connectionUri = await generateConnectionUri(state.config);
-      final channel = WebSocketChannel.connect(
+      final connection = WebSocketConnection.connect(
         connectionUri,
         protocols: protocols,
       );
-      sink = channel.sink;
+      _connection = connection;
+      sink = connection.channel.sink;
 
-      final subscriptionStream = transformStream(channel.stream);
+      final subscriptionStream = transformStream(connection.channel.stream);
 
       _send(WebSocketConnectionInitMessage());
 
@@ -122,6 +132,12 @@ class AmplifyWebSocketService
   Future<void> unsubscribe(String subscriptionId) async {
     logger.debug('Attempting to cancel Operation $subscriptionId');
     _send(WebSocketStopMessage(id: subscriptionId));
+  }
+
+  @override
+  void verifyConnection(Duration timeout) {
+    logger.verbose('Verifying the web socket connection');
+    _connection?.verify(timeout);
   }
 
   void _send(WebSocketMessage message) {
@@ -197,6 +213,7 @@ class AmplifyWebSocketService
   void close() {
     sink?.close();
     sink = null;
+    _connection = null;
   }
 
   @override
